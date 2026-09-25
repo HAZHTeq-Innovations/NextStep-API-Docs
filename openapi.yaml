@@ -1,0 +1,653 @@
+openapi: 3.1.0
+info:
+  title: NextStep Mock API
+  version: 1.0.0
+  summary: Deliberately unreliable mock of the NextStep AI decision assistant.
+  description: |
+    This API is deliberately unreliable, like real AI services under load.
+    Handling that is part of the challenge.
+
+    Every successful analysis has the same shape (`AnalysisResponse`). The
+    authoritative JSON Schema, including the conditional rules that OpenAPI
+    code generators ignore, is served at `GET /v1/schema`.
+
+    Situations are kept in memory for 24 hours and then deleted.
+servers:
+  - url: https://nextstepmockapi.onrender.com
+    description: Hosted mock API.
+
+# Everything is public except /admin/stats.
+security: []
+
+tags:
+  - name: situations
+    description: Create, resume, answer and update situations.
+  - name: stream
+    description: Server-Sent Events version of creating a situation.
+  - name: meta
+    description: Health, test scenarios and the JSON Schema. Never affected by chaos.
+  - name: admin
+    description: For the hiring panel.
+
+paths:
+  /health:
+    get:
+      tags: [meta]
+      summary: Liveness check. Never affected by chaos.
+      operationId: getHealth
+      responses:
+        '200':
+          description: The service is up.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string, const: ok }
+
+  /v1/scenarios:
+    get:
+      tags: [meta]
+      summary: The seven test scenarios. Never affected by chaos.
+      operationId: listScenarios
+      responses:
+        '200':
+          description: Scenario ids, types and input texts to test with.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [scenarios]
+                properties:
+                  scenarios:
+                    type: array
+                    items: { $ref: '#/components/schemas/Scenario' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /v1/schema:
+    get:
+      tags: [meta]
+      summary: JSON Schema (draft 2020-12) for AnalysisResponse. Never affected by chaos.
+      operationId: getSchema
+      responses:
+        '200':
+          description: The JSON Schema document.
+          content:
+            application/json:
+              schema: { type: object }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /v1/situations:
+    post:
+      tags: [situations]
+      summary: Submit a new situation and get its first analysis (version 1).
+      operationId: createSituation
+      parameters:
+        - $ref: '#/components/parameters/CandidateId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/Chaos'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SituationRequest' }
+            example:
+              text: "Viva is at 10am tomorrow, laptop won't boot, my project partner has been ignoring my calls for 2 days, and my dad just got admitted to a hospital in Surat. I'm in Pune."
+              locale: en-IN
+              client_time: '2026-10-02T23:55:00+05:30'
+      responses:
+        '200': { $ref: '#/components/responses/Analysis' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '500': { $ref: '#/components/responses/ServerError' }
+        '502': { $ref: '#/components/responses/GatewayTimeout' }
+
+  /v1/situations/{id}:
+    get:
+      tags: [situations]
+      summary: The latest version of a situation, for resuming after a restart or refresh.
+      description: Only the `slow` and `server_error` chaos modes apply here.
+      operationId: getSituation
+      parameters:
+        - $ref: '#/components/parameters/SituationId'
+        - $ref: '#/components/parameters/CandidateId'
+        - $ref: '#/components/parameters/Chaos'
+      responses:
+        '200': { $ref: '#/components/responses/Analysis' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '500': { $ref: '#/components/responses/ServerError' }
+
+  /v1/situations/{id}/answers:
+    post:
+      tags: [situations]
+      summary: Answer (or skip) clarifying questions. Returns a new version.
+      operationId: answerQuestions
+      parameters:
+        - $ref: '#/components/parameters/SituationId'
+        - $ref: '#/components/parameters/CandidateId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/Chaos'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AnswersRequest' }
+            example:
+              answers:
+                - { question_id: q_1, answer: 'No, family has it covered' }
+                - { question_id: q_3, answer: null }
+      responses:
+        '200': { $ref: '#/components/responses/Analysis' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '500': { $ref: '#/components/responses/ServerError' }
+        '502': { $ref: '#/components/responses/GatewayTimeout' }
+
+  /v1/situations/{id}/updates:
+    post:
+      tags: [situations]
+      summary: Report what changed. Returns a new version with a `changes` list.
+      operationId: updateSituation
+      parameters:
+        - $ref: '#/components/parameters/SituationId'
+        - $ref: '#/components/parameters/CandidateId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/Chaos'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateRequest' }
+            example:
+              text: 'My laptop is fixed, but the viva moved to Monday'
+              client_time: '2026-10-03T08:10:00+05:30'
+      responses:
+        '200': { $ref: '#/components/responses/Analysis' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/Unprocessable' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '500': { $ref: '#/components/responses/ServerError' }
+        '502': { $ref: '#/components/responses/GatewayTimeout' }
+
+  /v1/situations/stream:
+    get:
+      tags: [stream]
+      summary: Server-Sent Events version of POST /v1/situations.
+      description: |
+        Pass the input as `?text=` (short inputs), or as `?token=` from
+        `POST /v1/situations/stream` (any length). Browsers' EventSource can't
+        send headers, so `candidate_id` and `chaos` are also accepted as query
+        parameters.
+
+        Events, in order: `status` (stage updates), `issue` (one per issue),
+        `priority` (one per priority), then `done` with the full
+        AnalysisResponse. Close the EventSource when `done` arrives, or it
+        will reconnect and start a new analysis.
+      operationId: streamSituation
+      parameters:
+        - name: text
+          in: query
+          schema: { type: string }
+        - name: token
+          in: query
+          schema: { type: string, pattern: '^stk_[0-9a-f]{32}$' }
+        - name: client_time
+          in: query
+          schema: { type: string, format: date-time }
+        - name: candidate_id
+          in: query
+          schema: { type: string, maxLength: 64 }
+        - name: chaos
+          in: query
+          schema: { $ref: '#/components/schemas/ChaosMode' }
+        - $ref: '#/components/parameters/CandidateId'
+        - $ref: '#/components/parameters/Chaos'
+      responses:
+        '200':
+          description: An event stream. It may end without a `done` event.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: |
+                  `event: status` data: {"stage": "reading" | "identifying_issues" | "prioritising" | "finalising", "message": string}
+                  `event: issue` data: Issue
+                  `event: priority` data: Priority
+                  `event: done` data: AnalysisResponse
+              example: |
+                event: status
+                data: {"stage":"reading","message":"Reading what you wrote…"}
+
+                event: issue
+                data: {"id":"iss_1","title":"Dad admitted to hospital in Surat","category":"family","urgency":5,"deadline":null,"depends_on":[]}
+
+                event: done
+                data: {"situation_id":"sit_8f2k1x","version":1, ...}
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+    post:
+      tags: [stream]
+      summary: Register a long input for streaming. Returns a stream URL valid for 10 minutes.
+      operationId: createStreamToken
+      parameters:
+        - $ref: '#/components/parameters/CandidateId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SituationRequest' }
+      responses:
+        '200':
+          description: Open `stream_url` with EventSource.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StreamToken' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /admin/stats:
+    get:
+      tags: [admin]
+      summary: Request counts per candidate, endpoint and chaos mode. Hiring panel only.
+      operationId: getStats
+      security:
+        - adminToken: []
+      responses:
+        '200':
+          description: Counts since the server started.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminStats' }
+        '401':
+          description: Missing or wrong token, or admin stats disabled.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+components:
+  securitySchemes:
+    adminToken:
+      type: http
+      scheme: bearer
+
+  parameters:
+    SituationId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, pattern: '^sit_[a-z0-9]{6}$' }
+    CandidateId:
+      name: X-Candidate-Id
+      in: header
+      description: Your candidate id. Always send it. It gives you your own rate limit (60/min; without it you share a per-IP limit with your whole network) and makes the sequence of failures you see reproducible.
+      schema: { type: string, maxLength: 64 }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      description: |
+        Repeating a request with the same key within 10 minutes returns the
+        same response and creates nothing new. Reusing a key with a different
+        body returns 422.
+      schema: { type: string, maxLength: 255 }
+    Chaos:
+      name: X-Chaos
+      in: header
+      description: Force a specific failure mode, to reproduce it on purpose.
+      schema: { $ref: '#/components/schemas/ChaosMode' }
+
+  headers:
+    RetryAfter:
+      description: Seconds to wait before retrying.
+      schema: { type: integer, minimum: 1 }
+    RequestId:
+      description: Quote this when reporting a problem.
+      schema: { type: string }
+
+  responses:
+    Analysis:
+      description: |
+        An analysis. Under chaos, a 200 can still be broken: truncated JSON,
+        a body that breaks the schema, tied ranks, a contradictory next
+        action, or no issues at all.
+      headers:
+        X-Request-Id: { $ref: '#/components/headers/RequestId' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/AnalysisResponse' }
+    BadRequest:
+      description: The request is invalid (`invalid_request`, `invalid_json`, `invalid_chaos_mode`).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: Unknown or expired situation (`not_found`) or stream token (`stream_token_not_found`).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    PayloadTooLarge:
+      description: The body is over 100KB (`payload_too_large`).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Unprocessable:
+      description: |
+        Well-formed but can't be applied: `unknown_question`,
+        `question_not_skippable`, or `idempotency_key_reused`.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    RateLimited:
+      description: Too many requests (`rate_limited`). Wait for Retry-After seconds.
+      headers:
+        Retry-After: { $ref: '#/components/headers/RetryAfter' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    GatewayTimeout:
+      description: |
+        The gateway in front of the API gave up waiting (the `timeout` chaos
+        mode, after about 60 seconds). The body is empty and there are no CORS
+        headers, so in a browser this usually surfaces as a network error.
+
+    ServerError:
+      description: Server error. The body may be JSON or an HTML page from a proxy.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+        text/html:
+          schema: { type: string }
+
+  schemas:
+    ChaosMode:
+      type: string
+      enum:
+        [
+          none,
+          slow,
+          timeout,
+          malformed,
+          partial,
+          server_error,
+          rate_limit,
+          tie,
+          contradiction,
+          empty,
+        ]
+
+    Mode:
+      type: string
+      enum: [standard, support, out_of_scope, needs_clarification]
+
+    Category:
+      type: string
+      enum: [work_study, money, family, health, housing, relationships, travel, other]
+
+    SituationRequest:
+      type: object
+      required: [text]
+      properties:
+        text:
+          type: string
+          minLength: 1
+          description: Free-text description of the situation. The whole body must be under 100KB.
+        locale:
+          type: string
+          examples: [en-IN]
+        client_time:
+          type: string
+          format: date-time
+          description: |
+            The user's current time with UTC offset. Used to resolve "tomorrow",
+            "tonight" and weekday names. Without it, server time in UTC is used.
+
+    AnswersRequest:
+      type: object
+      required: [answers]
+      properties:
+        answers:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [question_id, answer]
+            properties:
+              question_id: { type: string, pattern: '^q_[0-9]+$' }
+              answer:
+                type: [string, 'null']
+                description: The answer text, or null to skip (only if the question is skippable).
+        client_time: { type: string, format: date-time }
+
+    UpdateRequest:
+      type: object
+      required: [text]
+      properties:
+        text:
+          type: string
+          minLength: 1
+          description: What happened since the last version, e.g. "Laptop is fixed".
+        client_time: { type: string, format: date-time }
+
+    StreamToken:
+      type: object
+      required: [stream_token, stream_url, expires_in_seconds]
+      properties:
+        stream_token: { type: string }
+        stream_url:
+          type: string
+          description: Includes candidate_id if you sent X-Candidate-Id, since EventSource can't send headers.
+          examples: ['/v1/situations/stream?token=stk_…&candidate_id=cand_017']
+        expires_in_seconds: { type: integer }
+
+    Scenario:
+      type: object
+      required: [id, type, input]
+      properties:
+        id: { type: string, examples: [s1_multi] }
+        type: { type: string, examples: [Multi-problem] }
+        input: { type: string }
+
+    Error:
+      type: object
+      required: [error, message, request_id]
+      properties:
+        error:
+          type: string
+          description: Machine-readable code, e.g. `rate_limited`, `internal_error`, `not_found`.
+        message: { type: string }
+        request_id: { type: string }
+
+    AnalysisResponse:
+      type: object
+      description: |
+        Rules beyond the field types (all enforced by GET /v1/schema):
+        - `support` mode: `issues` and `priorities` are empty, `next_action` is
+          null and `support` is set. In every other mode `support` is null.
+        - `standard` mode with at least one issue always has a `next_action`.
+        - `needs_clarification` mode has at least one clarifying question.
+        - `changes` is empty on version 1.
+        - Ranks run 1..n, and every `issue_id` refers to an issue in `issues`.
+      additionalProperties: false
+      required:
+        - situation_id
+        - version
+        - server_time
+        - mode
+        - summary
+        - issues
+        - priorities
+        - next_action
+        - clarifying_questions
+        - missing_information
+        - risk_flags
+        - confidence
+        - changes
+        - support
+      properties:
+        situation_id: { type: string, pattern: '^sit_[a-z0-9]{6}$' }
+        version: { type: integer, minimum: 1 }
+        server_time: { type: string, format: date-time }
+        mode: { $ref: '#/components/schemas/Mode' }
+        summary: { type: string, minLength: 1 }
+        issues:
+          type: array
+          items: { $ref: '#/components/schemas/Issue' }
+        priorities:
+          type: array
+          items: { $ref: '#/components/schemas/Priority' }
+        next_action:
+          oneOf:
+            - $ref: '#/components/schemas/NextAction'
+            - type: 'null'
+        clarifying_questions:
+          type: array
+          items: { $ref: '#/components/schemas/ClarifyingQuestion' }
+        missing_information:
+          type: array
+          items: { type: string }
+        risk_flags:
+          type: array
+          uniqueItems: true
+          description: Machine-readable flags such as `possible_scam_message`. Treat unknown values as informational.
+          items: { type: string, pattern: '^[a-z][a-z0-9_]*$' }
+        confidence: { $ref: '#/components/schemas/Confidence' }
+        changes:
+          type: array
+          items: { $ref: '#/components/schemas/Change' }
+        support:
+          oneOf:
+            - $ref: '#/components/schemas/Support'
+            - type: 'null'
+
+    Issue:
+      type: object
+      additionalProperties: false
+      required: [id, title, category, urgency, deadline, depends_on]
+      properties:
+        id: { type: string, pattern: '^iss_[0-9]+$' }
+        title: { type: string, minLength: 1 }
+        category: { $ref: '#/components/schemas/Category' }
+        urgency: { type: integer, minimum: 1, maximum: 5 }
+        deadline:
+          type: [string, 'null']
+          format: date-time
+          description: In the user's UTC offset; null when there is no known deadline.
+        depends_on:
+          type: array
+          description: Issues that must be dealt with before this one.
+          items: { type: string, pattern: '^iss_[0-9]+$' }
+
+    Priority:
+      type: object
+      additionalProperties: false
+      required: [rank, issue_id, action, reason, estimated_minutes]
+      properties:
+        rank: { type: integer, minimum: 1 }
+        issue_id: { type: string, pattern: '^iss_[0-9]+$' }
+        action: { type: string, minLength: 1 }
+        reason: { type: string, minLength: 1 }
+        estimated_minutes: { type: integer, minimum: 1 }
+
+    NextAction:
+      type: object
+      additionalProperties: false
+      required: [text, issue_id, why]
+      properties:
+        text: { type: string, minLength: 1 }
+        issue_id: { type: string, pattern: '^iss_[0-9]+$' }
+        why: { type: string, minLength: 1 }
+
+    ClarifyingQuestion:
+      type: object
+      additionalProperties: false
+      required: [id, question, options, skippable]
+      properties:
+        id: { type: string, pattern: '^q_[0-9]+$' }
+        question: { type: string, minLength: 1 }
+        options:
+          type: array
+          description: Suggested answers. Empty means a free-text answer is expected.
+          items: { type: string, minLength: 1 }
+        skippable: { type: boolean }
+
+    Confidence:
+      type: object
+      additionalProperties: false
+      required: [level, reasons]
+      properties:
+        level: { type: string, enum: [low, medium, high] }
+        reasons:
+          type: array
+          items: { type: string }
+
+    Change:
+      type: object
+      additionalProperties: false
+      required: [field, from, to, reason]
+      properties:
+        field:
+          type: string
+          description: Dotted path of what changed, e.g. `issues.iss_2.deadline`, or `issues.iss_3` for an added or removed issue.
+        from: { type: [string, 'null'] }
+        to: { type: [string, 'null'] }
+        reason: { type: string }
+
+    Support:
+      type: object
+      additionalProperties: false
+      required: [message, resources, offer_to_continue]
+      properties:
+        message: { type: string }
+        resources:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            additionalProperties: false
+            required: [name, contact, hours]
+            properties:
+              name: { type: string }
+              contact: { type: string }
+              hours: { type: string }
+        offer_to_continue: { type: string }
+
+    Counts:
+      type: object
+      additionalProperties: { type: integer }
+
+    AdminStats:
+      type: object
+      required:
+        [
+          since,
+          total_requests,
+          active_situations,
+          by_endpoint,
+          by_chaos_mode,
+          forced_chaos,
+          by_candidate,
+        ]
+      properties:
+        since: { type: string, format: date-time }
+        total_requests: { type: integer }
+        active_situations: { type: integer }
+        by_endpoint: { $ref: '#/components/schemas/Counts' }
+        by_chaos_mode: { $ref: '#/components/schemas/Counts' }
+        forced_chaos: { $ref: '#/components/schemas/Counts' }
+        by_candidate:
+          type: object
+          additionalProperties:
+            type: object
+            properties:
+              total: { type: integer }
+              by_endpoint: { $ref: '#/components/schemas/Counts' }
+              by_chaos_mode: { $ref: '#/components/schemas/Counts' }
+              forced_chaos: { $ref: '#/components/schemas/Counts' }
