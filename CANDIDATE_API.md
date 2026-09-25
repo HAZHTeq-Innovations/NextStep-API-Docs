@@ -15,7 +15,7 @@ Responses can be slow, cut off, malformed, missing, contradictory, or rate limit
 ```bash
 curl -X POST https://nextstepmockapi.onrender.com/v1/situations \
   -H 'Content-Type: application/json' \
-  -H 'X-Candidate-Id: your-candidate-id' \
+  -H 'X-Candidate-Id: you@example.com' \
   -H 'Idempotency-Key: 6f1c2b8e-3f0a-4e4b-9a57-0f5d2f7c9e10' \
   -d '{
         "text": "Viva is at 10am tomorrow, laptop won'\''t boot, my project partner has been ignoring my calls for 2 days, and my dad just got admitted to a hospital in Surat. I'\''m in Pune.",
@@ -28,12 +28,12 @@ curl -X POST https://nextstepmockapi.onrender.com/v1/situations \
 
 ## Headers you can send
 
-| Header            | Purpose                                                                                                                                                                                                                     |
-| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `X-Candidate-Id`  | Your candidate id, from your brief. **Always send it**, on every request. It gives you your own rate limit (see [Rate limit](#rate-limit)), and the failures you see come in a sequence that is reproducible for your id.   |
-| `Idempotency-Key` | A unique value per user action (a UUID is ideal). Sending the same key again within 10 minutes returns the same response and creates nothing new. Reusing a key with a different body returns `422 idempotency_key_reused`. |
-| `X-Chaos`         | Forces a specific failure mode so you can reproduce it on purpose. See [Chaos modes](#chaos-modes).                                                                                                                         |
-| `Content-Type`    | `application/json` on every POST.                                                                                                                                                                                           |
+| Header            | Purpose                                                                                                                                                                                                                                        |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `X-Candidate-Id`  | Use the email address you'll put in the submission form. **Always send it**, on every request. It gives you your own rate limit (see [Rate limit](#rate-limit)), and the failures you see come in a sequence that is reproducible for your id. |
+| `Idempotency-Key` | A unique value per user action (a UUID is ideal). Sending the same key again within 10 minutes returns the same response and creates nothing new. Reusing a key with a different body returns `422 idempotency_key_reused`.                    |
+| `X-Chaos`         | Forces a specific failure mode so you can reproduce it on purpose. See [Chaos modes](#chaos-modes).                                                                                                                                            |
+| `Content-Type`    | `application/json` on every POST.                                                                                                                                                                                                              |
 
 Browsers' `EventSource` can't send headers, so the stream endpoint also accepts `candidate_id` and `chaos` as query parameters. Put `candidate_id` on every stream URL you build.
 
@@ -251,7 +251,7 @@ Events, in order:
 
 ```js
 const source = new EventSource(
-  `${BASE}/v1/situations/stream?text=${encodeURIComponent(text)}&candidate_id=${id}`,
+  `${BASE}/v1/situations/stream?text=${encodeURIComponent(text)}&candidate_id=${encodeURIComponent(email)}`,
 );
 source.addEventListener('issue', (e) => addIssue(JSON.parse(e.data)));
 source.addEventListener('done', (e) => {
